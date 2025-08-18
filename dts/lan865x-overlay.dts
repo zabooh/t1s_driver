@@ -1,0 +1,75 @@
+// Overlay for the Microchip LAN865X Ethernet Controller
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2835";
+
+	fragment@0 {
+		target = <&spi0>;
+		__overlay__ {
+			/* needed to avoid dtc warning */
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			status = "okay";
+
+		/* Settings for the lan865x click board connected with Mikro Bus 2 */
+		eth2: lan865x@1{
+				compatible = "microchip,lan8651", "microchip,lan8650";
+				reg = <1>; /* CE1 */
+				pinctrl-names = "default";
+				pinctrl-0 = <&eth2_pins>;
+				interrupt-parent = <&gpio>;
+				interrupts = <26 0x2>; /* 0x2 - falling edge trigger */
+				local-mac-address = [14 15 16 11 12 13];
+				spi-max-frequency = <15000000>;
+				status = "okay";
+			};
+		/* Settings for the lan865x click board connected with Mikro Bus 1 */
+		eth1: lan865x@0{
+				compatible = "microchip,lan8651", "microchip,lan8650";
+				reg = <0>; /* CE0 */
+				pinctrl-names = "default";
+				pinctrl-0 = <&eth1_pins>;
+				interrupt-parent = <&gpio>;
+				interrupts = <6 0x2>; /* 0x2 - falling edge trigger */
+				local-mac-address = [04 05 06 01 02 03];
+				spi-max-frequency = <15000000>;
+				status = "okay";
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <&spidev0>;
+		__overlay__ {
+			status = "disabled";
+		};
+	};
+
+	fragment@2 {
+		target = <&gpio>;
+		__overlay__ {
+			eth1_pins: eth1_pins {
+				brcm,pins = <6>;
+				brcm,function = <0>; /* in */
+				brcm,pull = <0>; /* none */
+			};
+			eth2_pins: eth2_pins {
+				brcm,pins = <26>;
+				brcm,function = <0>; /* in */
+				brcm,pull = <0>; /* none */
+			};
+		};
+	};
+
+	__overrides__ {
+		int_pin_1 = <&eth1>, "interrupts:0",
+		          <&eth1_pins>, "brcm,pins:0";
+		speed_1   = <&eth1>, "spi-max-frequency:0";
+		int_pin_2 = <&eth2>, "interrupts:0",
+		          <&eth2_pins>, "brcm,pins:0";
+		speed_2   = <&eth2>, "spi-max-frequency:0";
+	};
+};
