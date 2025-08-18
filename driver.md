@@ -126,6 +126,56 @@ The source code implements:
 - Communication is mainly serial via SPI and corresponding framework (`oa_tc6.c`), supported by dynamically generated MDIO commands.
 - The architecture separates MAC-PHY (SPI) and PHY (MDIO) but integrates them via net_device and oa_tc6 structures in the Linux network stack.
 
+In your provided kernel driver (especially `lan865x.c`), the device tree is evaluated mainly during the initialization (probe) phase for the SPI device. The relevant code is found in the function `lan865x_probe(struct spi_device *spi)`.
+
+### Where is the device tree used?
+
+**In `lan865x_probe`:**
+The line
+```c
+if (device_get_ethdev_address(&spi->dev, netdev))
+    eth_hw_addr_random(netdev);
+```
+is where the driver attempts to fetch the MAC address from the SPI device node, which is commonly specified in the device tree.  
+- **`device_get_ethdev_address`** is a helper function that tries to read the `mac-address` property from the device tree node of the SPI device.  
+- If it fails, the MAC address is randomly assigned (`eth_hw_addr_random`).
+
+**The matching of drivers to device tree nodes is also handled:**
+- The driver provides an array of compatible device tree IDs:
+  ```c
+  static const struct of_device_id lan865x_dt_ids[] = {
+      { .compatible = "microchip,lan8650" },
+      { /* Sentinel */ }
+  };
+  MODULE_DEVICE_TABLE(of, lan865x_dt_ids);
+  ```
+- In the SPI driver struct:
+  ```c
+  .driver = {
+      .name = DRV_NAME,
+      .of_match_table = lan865x_dt_ids,
+  },
+  ```
+
+This ensures that the driver is bound to SPI devices which are declared with corresponding `compatible` strings in the device tree.
+
+***
+
+### Summary
+
+- **Device tree evaluation** occurs in `lan865x_probe` and in the driver's device ID & compatible setup.
+- The function `device_get_ethdev_address` is used to get the MAC address from the device tree node.
+- The device tree binding happens via the `compatible` property and the driver's `of_match_table`.
+
+If you want to parse further properties from the device tree, you would use similar helper functions, referencing `spi->dev.of_node`.
+
+[1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/36104590/bf968ee6-5b5b-489c-958a-47762c8fce9c/lan865x.c
+[2] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/36104590/f8ac0b20-8be1-4b26-b4e5-3650b021af1b/microchip_t1s.c
+[3] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/36104590/79b22ea4-aa5a-4600-8d8e-c4cea6ce6c6f/oa_tc6.c
+[4] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/36104590/c97d7727-6339-41c3-b576-16698fb8f6b2/oa_tc6.h
+
+
+
 If you need detailed explanations or diagrams for a specific component, let me know!
 
 [1] https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/36104590/bf968ee6-5b5b-489c-958a-47762c8fce9c/lan865x.c
