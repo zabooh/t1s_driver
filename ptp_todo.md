@@ -1,118 +1,118 @@
-# Implementierungsplan: Hardware-PTP für LAN865x Linux-Treiber
+# Implementation Plan: Hardware PTP for LAN865x Linux Driver
 
-Dieser Leitfaden beschreibt die notwendigen Schritte, um die Hardware-PTP-Funktionalität des Microchip LAN865x im Linux-Treiber zu implementieren. Ziel ist, dass Anwendungen wie `ptp4l` über das PHC-Subsystem auf die präzise Hardwareuhr zugreifen können.
-
----
-
-## 1. **Hardware-Spezifikation prüfen**
-- Studiere das LAN865x-Datenblatt und die Registerbeschreibung für PTP/Wallclock.
-- Identifiziere alle relevanten Register für:
-  - Zeit lesen/setzen
-  - Zeitstempel-Erfassung (TX/RX)
-  - Event-Handling (EXTTS, PEROUT)
-  - Frequenz- und Zeitkorrektur
+This guide describes the necessary steps to implement the hardware PTP functionality of the Microchip LAN865x in the Linux driver. The goal is for applications like `ptp4l` to access the precise hardware clock via the PHC subsystem.
 
 ---
 
-## 2. **PTP-Datenstrukturen im Treiber anlegen**
-- Lege eine eigene Struktur für den PTP-Kontext an (`struct lan865x_ptp`).
-- Enthält:
-  - PTP-Clock-Handle (`struct ptp_clock *`)
-  - PTP-Clock-Info (`struct ptp_clock_info`)
-  - Locks für Synchronisation
-  - Queues für TX/RX-Timestamps
-  - Event- und Interrupt-Status
+## 1. **Check Hardware Specification**
+- Study the LAN865x datasheet and register description for PTP/Wallclock.
+- Identify all relevant registers for:
+  - Reading/setting time
+  - Timestamp capture (TX/RX)
+  - Event handling (EXTTS, PEROUT)
+  - Frequency and time correction
 
 ---
 
-## 3. **Registerzugriffe implementieren**
-- Schreibe Funktionen zum Lesen/Schreiben der PTP-Register:
-  - Zeit lesen (`ptp_clock_get`)
-  - Zeit setzen (`ptp_clock_set`)
-  - Zeit anpassen (`adjtime`, `adjfine`)
-  - Event-Konfiguration (EXTTS, PEROUT)
-- Nutze die vorhandenen SPI-Registerfunktionen (`oa_tc6_read_register`, `oa_tc6_write_register`).
+## 2. **Create PTP Data Structures in the Driver**
+- Define a dedicated structure for the PTP context (`struct lan865x_ptp`).
+- Includes:
+  - PTP clock handle (`struct ptp_clock *`)
+  - PTP clock info (`struct ptp_clock_info`)
+  - Locks for synchronization
+  - Queues for TX/RX timestamps
+  - Event and interrupt status
 
 ---
 
-## 4. **PTP-Clock-Info ausfüllen und registrieren**
-- Implementiere die Methoden für `struct ptp_clock_info`:
+## 3. **Implement Register Access**
+- Write functions to read/write the PTP registers:
+  - Read time (`ptp_clock_get`)
+  - Set time (`ptp_clock_set`)
+  - Adjust time (`adjtime`, `adjfine`)
+  - Event configuration (EXTTS, PEROUT)
+- Use the existing SPI register functions (`oa_tc6_read_register`, `oa_tc6_write_register`).
+
+---
+
+## 4. **Fill and Register PTP Clock Info**
+- Implement the methods for `struct ptp_clock_info`:
   - `gettime64`
   - `settime64`
   - `adjtime`
   - `adjfine`
   - `enable`
   - `do_aux_work` (optional)
-- Registriere die PTP-Clock im Kernel mit `ptp_clock_register`.
+- Register the PTP clock in the kernel with `ptp_clock_register`.
 
 ---
 
-## 5. **TX/RX-Timestamping integrieren**
-- Erfasse Hardware-Zeitstempel für ausgehende und eingehende Pakete:
-  - Lese die Zeitstempel aus den entsprechenden LAN865x-Registern.
-  - Ordne die Zeitstempel den jeweiligen Paketen (`struct sk_buff`) zu.
-  - Setze die Zeitstempel in die `skb_shared_hwtstamps`-Struktur.
-- Implementiere eine Queue für ausstehende Zeitstempel (wie im LAN743x).
+## 5. **Integrate TX/RX Timestamping**
+- Capture hardware timestamps for outgoing and incoming packets:
+  - Read the timestamps from the corresponding LAN865x registers.
+  - Assign the timestamps to the respective packets (`struct sk_buff`).
+  - Set the timestamps in the `skb_shared_hwtstamps` structure.
+- Implement a queue for pending timestamps (as in LAN743x).
 
 ---
 
-## 6. **Event- und Interrupt-Handling**
-- Implementiere Interrupt-Handler für PTP-Events:
-  - EXTTS (externe Zeitereignisse)
-  - PEROUT (periodische Ausgaben)
-  - Fehler- und Status-Events
-- Melde Events an das PHC-Subsystem weiter.
+## 6. **Event and Interrupt Handling**
+- Implement interrupt handlers for PTP events:
+  - EXTTS (external time events)
+  - PEROUT (periodic outputs)
+  - Error and status events
+- Report events to the PHC subsystem.
 
 ---
 
-## 7. **GPIO/Pin-Konfiguration für PTP**
-- Falls die Hardware spezielle Pins für PTP-Events nutzt:
-  - Implementiere Funktionen zur Konfiguration der Pins (z.B. für EXTTS, PEROUT).
-  - Nutze ggf. Multiplexing-Funktionen wie im LAN743x.
+## 7. **GPIO/Pin Configuration for PTP**
+- If the hardware uses special pins for PTP events:
+  - Implement functions to configure the pins (e.g., for EXTTS, PEROUT).
+  - Use multiplexing functions if needed, as in LAN743x.
 
 ---
 
-## 8. **IOCTL- und User-Interface**
-- Implementiere die IOCTL-Schnittstelle für Hardware-Timestamping (`SIOCSHWTSTAMP`).
-- Ermögliche die Konfiguration der Zeitstempelung über `ethtool` und `ioctl`.
+## 8. **IOCTL and User Interface**
+- Implement the IOCTL interface for hardware timestamping (`SIOCSHWTSTAMP`).
+- Enable configuration of timestamping via `ethtool` and `ioctl`.
 
 ---
 
-## 9. **Integration in Treiber-Lifecycle**
-- Initialisiere die PTP-Funktionen beim Treiberstart (`probe`, `init`).
-- Registriere die PTP-Clock beim Öffnen der Netzwerkschnittstelle.
-- Gib Ressourcen beim Schließen/Freigeben wieder frei.
+## 9. **Integration into Driver Lifecycle**
+- Initialize the PTP functions during driver startup (`probe`, `init`).
+- Register the PTP clock when opening the network interface.
+- Release resources when closing/freeing.
 
 ---
 
-## 10. **Test und Validierung**
-- Teste die Integration mit `ptp4l` und anderen PHC-Anwendungen.
-- Prüfe die Genauigkeit und Zuverlässigkeit der Zeitstempel.
-- Führe Stresstests und Fehlerbehandlung durch.
+## 10. **Testing and Validation**
+- Test the integration with `ptp4l` and other PHC applications.
+- Check the accuracy and reliability of the timestamps.
+- Perform stress tests and error handling.
 
 ---
 
-## Beispiel: Wichtige Funktionen (analog zu LAN743x)
+## Example: Important Functions (analogous to LAN743x)
 
 ```c
-// Initialisierung
+// Initialization
 int lan865x_ptp_init(struct lan865x_adapter *adapter);
 
-// Zeit lesen
+// Read time
 static int lan865x_ptpci_gettime64(struct ptp_clock_info *ptpci, struct timespec64 *ts);
 
-// Zeit setzen
+// Set time
 static int lan865x_ptpci_settime64(struct ptp_clock_info *ptpci, const struct timespec64 *ts);
 
-// Zeit anpassen
+// Adjust time
 static int lan865x_ptpci_adjtime(struct ptp_clock_info *ptpci, s64 delta);
 static int lan865x_ptpci_adjfine(struct ptp_clock_info *ptpci, long scaled_ppm);
 
-// TX/RX-Timestamping
+// TX/RX Timestamping
 void lan865x_ptp_tx_timestamp_skb(struct lan865x_adapter *adapter, struct sk_buff *skb);
 void lan865x_ptp_rx_timestamp_skb(struct lan865x_adapter *adapter, struct sk_buff *skb);
 
-// Event-Handling
+// Event Handling
 void lan865x_ptp_isr(void *context);
 
 // IOCTL
@@ -121,6 +121,6 @@ int lan865x_ptp_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd);
 
 ---
 
-## **Zusammenfassung**
+## **Summary**
 
-Mit diesem Plan kannst du die Hardware-PTP-Funktionen des LAN865x so in den Treiber integrieren, dass sie über das PHC-Subsystem und Anwendungen wie `ptp4l` nutzbar sind. Die Referenzimplementierung des LAN743x-Treibers ist dabei eine gute Hilfe für den Aufbau und die Struktur der Funktionalität.
+With this plan, you can integrate the LAN865x hardware PTP functions into the driver so they are usable via the PHC subsystem and applications like `ptp4l`. The reference implementation of the LAN743x driver is a good guide for the structure and
