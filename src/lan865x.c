@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0+
+	// SPDX-License-Identifier: GPL-2.0+
 /*
  * Microchip's LAN865x 10BASE-T1S MAC-PHY driver
  *
@@ -9,6 +9,7 @@
 #include <linux/kernel.h>
 #include <linux/phy.h>
 #include "oa_tc6.h"
+#include "lan865x_ptp.h"
 
 #define DRV_NAME			"lan865x"
 
@@ -199,6 +200,16 @@ static netdev_tx_t lan865x_send_packet(struct sk_buff *skb,
 {
 	struct lan865x_priv *priv = netdev_priv(netdev);
 
+	// Falls Hardware-Timestamping für TX angefordert ist
+	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
+		// Markiere das Paket für Hardware-Timestamping
+		skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
+	}
+
+	print_hex_dump(KERN_INFO, "TX skb: ", DUMP_PREFIX_OFFSET,
+                   16, 1,
+                   skb->data, skb->len, true);
+
 	return oa_tc6_start_xmit(priv->tc6, skb);
 }
 
@@ -303,6 +314,8 @@ static int lan865x_probe(struct spi_device *spi)
 	if (!netdev)
 		return -ENOMEM;
 
+	netdev_info(netdev, "lan865x_probe() function started....");
+	
 	priv = netdev_priv(netdev);
 	priv->netdev = netdev;
 	priv->spi = spi;
@@ -354,14 +367,26 @@ static int lan865x_probe(struct spi_device *spi)
 	netdev->netdev_ops = &lan865x_netdev_ops;
 	netdev->ethtool_ops = &lan865x_ethtool_ops;
 
+	// PTP-Unterstützung initialisieren
+	ret = lan865x_ptp_init((struct lan865x_adapter *)priv);
+    if (ret) {
+        dev_err(&spi->dev, "Failed to initialize PTP: %d\n", ret);
+        goto oa_tc6_exit;
+    }
+
 	ret = register_netdev(netdev);
 	if (ret) {
 		dev_err(&spi->dev, "Register netdev failed (ret = %d)", ret);
 		goto oa_tc6_exit;
 	}
 
+	netdev_info(netdev, "lan865x_probe() function successful");
+	
 	return 0;
 
+
+ptp_remove:
+    lan865x_ptp_remove((struct lan865x_adapter *)priv);
 oa_tc6_exit:
 	oa_tc6_exit(priv->tc6);
 free_netdev:
@@ -375,6 +400,10 @@ static void lan865x_remove(struct spi_device *spi)
 
 	cancel_work_sync(&priv->multicast_work);
 	unregister_netdev(priv->netdev);
+
+    // PTP-Unterstützung entfernen
+    lan865x_ptp_remove((struct lan865x_adapter *)priv);
+
 	oa_tc6_exit(priv->tc6);
 	free_netdev(priv->netdev);
 }
