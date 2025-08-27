@@ -1,4 +1,4 @@
-	// SPDX-License-Identifier: GPL-2.0+
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Microchip's LAN865x 10BASE-T1S MAC-PHY driver
  *
@@ -10,38 +10,19 @@
 #include <linux/phy.h>
 #include "oa_tc6.h"
 #include "lan865x_ptp.h"
+#include "lan865x.h"
+
 
 #define DRV_NAME			"lan865x"
+#define DEBUG_REG_DUMP		true
 
-/* MAC Network Control Register */
-#define LAN865X_REG_MAC_NET_CTL		0x00010000
-#define MAC_NET_CTL_TXEN		BIT(3) /* Transmit Enable */
-#define MAC_NET_CTL_RXEN		BIT(2) /* Receive Enable */
-
-#define LAN865X_REG_MAC_NET_CFG		0x00010001 /* MAC Network Configuration Reg */
-#define MAC_NET_CFG_PROMISCUOUS_MODE	BIT(4)
-#define MAC_NET_CFG_MULTICAST_MODE	BIT(6)
-#define MAC_NET_CFG_UNICAST_MODE	BIT(7)
-
-#define LAN865X_REG_MAC_L_HASH		0x00010020 /* MAC Hash Register Bottom */
-#define LAN865X_REG_MAC_H_HASH		0x00010021 /* MAC Hash Register Top */
-#define LAN865X_REG_MAC_L_SADDR1	0x00010022 /* MAC Specific Addr 1 Bottom Reg */
-#define LAN865X_REG_MAC_H_SADDR1	0x00010023 /* MAC Specific Addr 1 Top Reg */
-
-/* LAN8650/1 configuration fixup from AN1760 */
-#define LAN865X_FIXUP_REG		0x00010077
-#define LAN865X_FIXUP_VALUE		0x0028
-
-/* OPEN Alliance Configuration Register #0 */
-#define OA_TC6_REG_CONFIG0		0x0004
-#define CONFIG0_ZARFE_ENABLE		BIT(12)
-
-struct lan865x_priv {
+/*struct lan865x_priv {
 	struct work_struct multicast_work;
 	struct net_device *netdev;
 	struct spi_device *spi;
 	struct oa_tc6 *tc6;
-};
+	struct lan865x_ptp ptp;
+};*/
 
 static int lan865x_set_hw_macaddr_low_bytes(struct oa_tc6 *tc6, const u8 *mac)
 {
@@ -200,16 +181,6 @@ static netdev_tx_t lan865x_send_packet(struct sk_buff *skb,
 {
 	struct lan865x_priv *priv = netdev_priv(netdev);
 
-	// Falls Hardware-Timestamping für TX angefordert ist
-	if (skb_shinfo(skb)->tx_flags & SKBTX_HW_TSTAMP) {
-		// Markiere das Paket für Hardware-Timestamping
-		skb_shinfo(skb)->tx_flags |= SKBTX_IN_PROGRESS;
-	}
-
-	print_hex_dump(KERN_INFO, "TX skb: ", DUMP_PREFIX_OFFSET,
-                   16, 1,
-                   skb->data, skb->len, true);
-
 	return oa_tc6_start_xmit(priv->tc6, skb);
 }
 
@@ -304,6 +275,161 @@ static int lan865x_set_zarfe(struct lan865x_priv *priv)
 	return oa_tc6_write_register(priv->tc6, OA_TC6_REG_CONFIG0, regval);
 }
 
+static int lan865x_init_wallclock(struct lan865x_priv *priv){
+	
+	struct oa_tc6 *tc6 = priv->tc6;
+	struct timespec64 ts;
+	int ret = 0;
+	struct lan865x_ptp *ptp = &priv->ptp;
+	/* Setting Wallclock to current kernel time */
+	/* Referenced from LAN743x_ptp & LAN9662_ptp */
+	ktime_get_clocktai_ts64(&ts);
+	netdev_info(priv->netdev, "Current Kernel Time: Timestamp_sec %llx; Timestamp_nsec %lx ", ts.tv_sec, ts.tv_nsec);
+	/* Update MAC-PHY Wallclock */
+	ret = lan865x_ptp_clock_set(priv, ts.tv_sec, ts.tv_nsec, 0);
+	return ret;
+}
+
+static int lan865x_setup_rx_phy_timestamping(struct oa_tc6 *tc6){
+	int ret;
+	
+	/* Set the Receive match Pattern to 0x88F710 by */
+	/* Writing 0x0088 to RXMPATH */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMPATH, RXMPATH_PTP);
+	if (ret)
+		return ret;
+	/* Writing 0xF710 to RXMPATL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMPATL, RXMPATL_PTP);
+	if (ret)
+		return ret;
+	/* Set the Receive match mask to 0x000000 by */
+	/* Writing 0x0000 to RXMMSKH */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMMSKH, RXMASKH);
+	if (ret)
+		return ret;
+	/* Writing 0x0000 to RXMMSKL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMMSKL, RXMASKL);
+	if (ret)
+		return ret;
+	/* Writing 0x0 to RXMLOC */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMLOC, RXMLOC_S_O_F);
+	if (ret)
+		return ret;
+	/* Writing 0x2 to RXMCTL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | RXMCTL, RXME);
+	if (ret)
+		return ret;
+	return 0;
+}
+
+static int lan865x_setup_tx_phy_timestamping(struct oa_tc6 *tc6){
+	int ret;
+	
+	/* Set the Transmit match Pattern to 0x88F710 by */
+	/* Writing 0x0088 to TXMPATH */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMPATH, TXMPATL_PTP);
+	if (ret)
+		return ret;
+	/* Writing 0xF710 to TXMPATL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMPATL, TXMPATL_PTP);
+	if (ret)
+		return ret;
+	/* Set the Transmit match mask to 0xFFFFFF by*/
+	/* Writing 0x0000 to TXMMSKH */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMMSKH, TXMASKH_ALL);
+	if (ret)
+		return ret;
+	/* Writing 0x0000 to TXMMSKL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMMSKL, TXMASKL_ALL);
+	if (ret)
+		return ret;
+	/* Writing 0x0 to TXMLOC */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMLOC, TXMLOC_S_O_F);
+	if (ret)
+		return ret;
+	/* Writing 0x2 to TXMCTL */
+	ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_PHY << 16) | TXMCTL, TXME);
+	if (ret)
+		return ret;
+	
+	return 0;
+}
+
+static int lan865x_enable_timestamping(struct lan865x_priv *priv) /* DT added for Timestamping PTP in lan865x */
+{
+	struct oa_tc6 *tc6 = priv->tc6;
+	u32 value;
+	int ret;
+
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STDCAP, &value);
+	if (ret)
+		return ret;
+	if (value & STDCAP_FTSC) {
+		netdev_info(priv->netdev, "TimeStamp Capable MAC-PHY - proceeding enabling Timestamping");
+		ret = lan865x_init_wallclock(priv);
+		if (ret)
+			return ret;
+
+#ifdef DEBUG_REG_DUMP		
+		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TI, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: MAC_TI %x", value);
+		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TN, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: MAC_TN %x", value);	
+		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSL, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: MAC_TSL %x", value);
+		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSH, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: MAC_TSH %x", value);			
+		
+		ret = oa_tc6_read_register(tc6, (MMS10 << 16) | CFGPRTCTL, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: CFGPRTCTL %x", value);
+#endif
+		/* Following the Baremetal documentation one needs to */
+		/* Probably will need to add a TX TSE Bit as well, so that the MAC is generating a timestamp at the next plca cycle*/
+		ret = lan865x_setup_tx_phy_timestamping(tc6);
+		if (ret)
+			return ret;
+		ret = lan865x_setup_rx_phy_timestamping(tc6);
+		if (ret)
+			return ret;
+		
+#ifdef DEBUG_REG_DUMP
+		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMMSKH, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: RXMMSKH %x", value);
+		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMMSKL, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: RXMMSKL %x", value);	
+		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMLOC, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: RXMLOC %x", value);
+		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMCTL, &value);
+		if (ret)
+			return ret;
+		netdev_info(priv->netdev, "Reading back: RXMCTL %x", value);
+#endif	
+
+		ret = oa_tc6_enable_timestamping(tc6);
+		if (ret)
+			return ret;
+		
+		return 0;
+	}
+	return -EINVAL;
+}
+
 static int lan865x_probe(struct spi_device *spi)
 {
 	struct net_device *netdev;
@@ -314,8 +440,6 @@ static int lan865x_probe(struct spi_device *spi)
 	if (!netdev)
 		return -ENOMEM;
 
-	netdev_info(netdev, "lan865x_probe() function started....");
-	
 	priv = netdev_priv(netdev);
 	priv->netdev = netdev;
 	priv->spi = spi;
@@ -333,7 +457,7 @@ static int lan865x_probe(struct spi_device *spi)
 		dev_err(&spi->dev, "Failed to configure fixup: %d\n", ret);
 		goto oa_tc6_exit;
 	}
-
+	
 	/* As per the point s3 in the below errata, SPI receive Ethernet frame
 	 * transfer may halt when starting the next frame in the same data block
 	 * (chunk) as the end of a previous frame. The RFA field should be
@@ -352,6 +476,20 @@ static int lan865x_probe(struct spi_device *spi)
 		goto oa_tc6_exit;
 	}
 
+	ret = lan865x_ptp_init(priv);
+	if (ret) {
+		netdev_err(netdev, "Failed to enable PTP: %d\n",
+			ret);
+		goto oa_tc6_exit;
+	}
+
+	ret = lan865x_enable_timestamping(priv);
+	if (ret) {
+		netdev_err(netdev, "Failed to enable timestamping: %d\n",
+			ret);
+		goto oa_tc6_exit;
+	}
+
 	/* Get the MAC address from the SPI device tree node */
 	if (device_get_ethdev_address(&spi->dev, netdev))
 		eth_hw_addr_random(netdev);
@@ -367,27 +505,16 @@ static int lan865x_probe(struct spi_device *spi)
 	netdev->netdev_ops = &lan865x_netdev_ops;
 	netdev->ethtool_ops = &lan865x_ethtool_ops;
 
-	// PTP-Unterstützung initialisieren
-	ret = lan865x_ptp_init((struct lan865x_adapter *)priv);
-    if (ret) {
-        dev_err(&spi->dev, "Failed to initialize PTP: %d\n", ret);
-        goto oa_tc6_exit;
-    }
-
 	ret = register_netdev(netdev);
 	if (ret) {
 		dev_err(&spi->dev, "Register netdev failed (ret = %d)", ret);
 		goto oa_tc6_exit;
 	}
 
-	netdev_info(netdev, "lan865x_probe() function successful");
-	
 	return 0;
 
-
-ptp_remove:
-    lan865x_ptp_remove((struct lan865x_adapter *)priv);
 oa_tc6_exit:
+	lan865x_ptp_close(priv);
 	oa_tc6_exit(priv->tc6);
 free_netdev:
 	free_netdev(priv->netdev);
@@ -399,11 +526,8 @@ static void lan865x_remove(struct spi_device *spi)
 	struct lan865x_priv *priv = spi_get_drvdata(spi);
 
 	cancel_work_sync(&priv->multicast_work);
+	lan865x_ptp_close(priv);
 	unregister_netdev(priv->netdev);
-
-    // PTP-Unterstützung entfernen
-    lan865x_ptp_remove((struct lan865x_adapter *)priv);
-
 	oa_tc6_exit(priv->tc6);
 	free_netdev(priv->netdev);
 }

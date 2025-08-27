@@ -24,37 +24,8 @@
 /* Configuration Register #0 */
 #define OA_TC6_REG_CONFIG0			0x0004
 #define CONFIG0_SYNC				BIT(15)
-#define CONFIG0_FTSS                            BIT(6) /* Frame Time Stamp Select - 32 bit or 64 bit */
-#define CONFIG0_FTSE                            BIT(7)  /* Frame Time Stamp Enable */
-
-/* Receive Match Mask High Register */
-#define RXMMSKH				0x0053
-#define RXMASKH				0x00FF
-/* Receive Match Mask Low Register */
-#define RXMMSKL				0x0054
-#define RXMASKL				0xFFFF
-/* Receive Match Location Register */
-#define RXMLOC				0x0055
-#define RXMLOC_S_O_F		0x0
-/* Receive Match Control Register */
-#define RXMCTL				0x0050
-#define RXME				0x2
-
-/* MAC Timer Seconds High Register */
-#define MAC_TSH				0x70
-/* MAC Timer Seconds Low Register */
-#define MAC_TSL				0x74
-/* MAC Timer NanoSeconds Register */
-#define MAC_TN				0x75 //to be checked for accuracy
-/* MAC Timer Adjust Register */
-#define MAC_TA				0x76 //to be checked for accuracy
-#define MAC_TA_ADJ			BIT(31)
-/* MAC Timer Increment Register */
-#define MAC_TI				0x0077
-
-/* CFGPRTCTL Register to protect PHY related settings */
-#define CFGPRTCTL 			0x0099
-#define MMS10				0x0A
+#define CONFIG0_FTSS				BIT(6) /* Frame Time Stamp Select - 32 bit or 64 bit */
+#define CONFIG0_FTSE				BIT(7)  /* Frame Time Stamp Enable */
 
 /* Status Register #0 */
 #define OA_TC6_REG_STATUS0			0x0008
@@ -63,6 +34,10 @@
 #define STATUS0_LOSS_OF_FRAME_ERROR		BIT(4)
 #define STATUS0_RX_BUFFER_OVERFLOW_ERROR	BIT(3)
 #define STATUS0_TX_PROTOCOL_ERROR		BIT(0)
+#define STATUS0_TS_AVAILABLE		GENMASK(10,8)
+#define STATUS0_TSC					BIT(10)
+#define STATUS0_TSB					BIT(9)
+#define STATUS0_TSA					BIT(8)
 
 /* Buffer Status Register */
 #define OA_TC6_REG_BUFFER_STATUS		0x000B
@@ -144,34 +119,34 @@
 #define MDIO_MMD_POWER_UNIT			13      /* PHY Power Unit */
 
 /* Internal structure for MAC-PHY drivers */
-struct oa_tc6 {
-	struct device *dev;
-	struct net_device *netdev;
-	struct phy_device *phydev;
-	struct mii_bus *mdiobus;
-	struct spi_device *spi;
-	struct mutex spi_ctrl_lock; /* Protects spi control transfer */
-	void *spi_ctrl_tx_buf;
-	void *spi_ctrl_rx_buf;
-	void *spi_data_tx_buf;
-	void *spi_data_rx_buf;
-	struct sk_buff_head tx_skb_q;
-	struct sk_buff *tx_skb;
-	struct sk_buff *rx_skb;
-	struct task_struct *spi_thread;
-	wait_queue_head_t spi_wq;
-	u16 tx_skb_offset;
-	u16 spi_data_tx_buf_offset;
-	u16 tx_credits;
-	u8 rx_chunks_available;
-	bool rx_buf_overflow;
-	bool int_flag;
-	bool ftse;
-	bool rtsa;
-	bool rtsp;
-	bool incomplete_timestamp;
-	u64  timestamp;
-};
+//struct oa_tc6 {
+//	struct device *dev;
+//	struct net_device *netdev;
+//	struct phy_device *phydev;
+//	struct mii_bus *mdiobus;
+//	struct spi_device *spi;
+//	struct mutex spi_ctrl_lock; /* Protects spi control transfer */
+//	void *spi_ctrl_tx_buf;
+//	void *spi_ctrl_rx_buf;
+//	void *spi_data_tx_buf;
+//	void *spi_data_rx_buf;
+//	struct sk_buff_head tx_skb_q;
+//	struct sk_buff *tx_skb;
+//	struct sk_buff *rx_skb;
+//	struct task_struct *spi_thread;
+//	wait_queue_head_t spi_wq;
+//	u16 tx_skb_offset;
+//	u16 spi_data_tx_buf_offset;
+//	u16 tx_credits;
+//	u8 rx_chunks_available;
+//	bool rx_buf_overflow;
+//	bool int_flag;
+//	bool ftse;
+//	bool rtsa;
+//	bool rtsp;
+//	bool incomplete_timestamp;
+//	u64  timestamp;
+//};
 
 enum oa_tc6_header_type {
 	OA_TC6_CTRL_HEADER,
@@ -690,106 +665,6 @@ static int oa_tc6_enable_data_transfer(struct oa_tc6 *tc6)
 	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, value);
 }
 
-static int oa_tc6_enable_timestamping(struct oa_tc6 *tc6) /* DT added for Timestamping PTP in lan865x */
-{
-	u32 value;
-	struct timespec64 ts;
-	int ret;
-
-	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STDCAP, &value);
-	if (ret)
-		return ret;
-	if (value & STDCAP_FTSC) {
-		netdev_info(tc6->netdev, "TimeStamp Capable MAC-PHY - proceeding enabling Timestamping");
-		
-		/* Should one set a proper clock setting inside the MAC-PHY here?*/
-		/* Setting Timestamp to current kernel time */
-		/* Referenced from LAN743x_ptp & LAN9662_ptp */
-		ktime_get_clocktai_ts64(&ts);
-		netdev_info(tc6->netdev, "Current Kernel Time: Timestamp_sec %llx; Timestamp_nsec %lx ", ts.tv_sec, ts.tv_nsec);
-		/* Update MAC-PHY timestamp */
-		ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSH, upper_32_bits(ts.tv_sec));
-		if (ret)
-			return ret;
-		ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSL, lower_32_bits(ts.tv_sec));
-		if (ret)
-			return ret;
-		ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TN, ts.tv_nsec);
-		if (ret)
-			return ret;
-		ret = oa_tc6_write_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TI, 0x28);
-		if (ret)
-			return ret;
-		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TI, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: MAC_TI %x", value);
-		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TN, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: MAC_TN %x", value);	
-		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSL, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: MAC_TSL %x", value);
-		ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TSH, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: MAC_TSH %x", value);			
-		
-		ret = oa_tc6_read_register(tc6, (MMS10 << 16) | CFGPRTCTL, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: CFGPRTCTL %x", value);
-		/* Following the Baremetal documentation one needs to */
-		/* Probably will need to add a TX TSE Bit as well, so that the MAC is generating a timestamp at the next plca cycle*/
-		/* Set the Receive match mask to 0xFFFFFF by*/
-		/* Writing 0x00FF to RXMMSKH */
-		ret = oa_tc6_write_register(tc6, (4 << 16) | RXMMSKH, RXMASKH);
-		if (ret)
-			return ret;
-		/* Writing 0xFFFF to RXMMSKL */
-		ret = oa_tc6_write_register(tc6, (4 << 16) | RXMMSKL, RXMASKL);
-		if (ret)
-			return ret;
-		/* Writing 0x0 to RXMLOC */
-		ret = oa_tc6_write_register(tc6, (4 << 16) | RXMLOC, RXMLOC_S_O_F);
-		if (ret)
-			return ret;
-		/* Writing 0x2 to RXMCTL */
-		ret = oa_tc6_write_register(tc6, (4 << 16) | RXMCTL, RXME);
-		if (ret)
-			return ret;
-		
-		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMMSKH, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: RXMMSKH %x", value);
-		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMMSKL, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: RXMMSKL %x", value);	
-		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMLOC, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: RXMLOC %x", value);
-		ret = oa_tc6_read_register(tc6, (4 << 16) | RXMCTL, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Reading back: RXMCTL %x", value);
-		
-		ret = oa_tc6_read_register(tc6, OA_TC6_REG_CONFIG0, &value);
-		if (ret)
-			return ret;
-		
-		/* Enable time stamping */
-		value |= CONFIG0_FTSS; /* 64 bit timestamping fixed for now */
-		value |= CONFIG0_FTSE; /* Enable Timestamping */
-		tc6->ftse = true;
-	}
-	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, value);
-}
-
 static void oa_tc6_cleanup_ongoing_rx_skb(struct oa_tc6 *tc6)
 {
 	if (tc6->rx_skb) {
@@ -854,10 +729,40 @@ static int oa_tc6_process_extended_status(struct oa_tc6 *tc6)
 	return 0;
 }
 
-static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
-{
+int oa_tc6_enable_timestamping(struct oa_tc6 *tc6){
 	u32 value;
 	int ret;
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_CONFIG0, &value);
+	if (ret)
+		return ret;
+		
+	/* Enable time stamping */
+	value |= CONFIG0_FTSS; /* 64 bit timestamping fixed for now */
+	value |= CONFIG0_FTSE; /* Enable Timestamping */
+	tc6->ftse = true;
+	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, value);
+}
+
+int oa_tc6_disable_timestamping(struct oa_tc6 *tc6){
+	u32 value;
+	int ret;
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_CONFIG0, &value);
+	if (ret)
+		return ret;
+		
+	/* Enable time stamping */
+	value |= !(CONFIG0_FTSS); /* 64 bit timestamping fixed for now */
+	value |= !(CONFIG0_FTSE); /* Enable Timestamping */
+	tc6->ftse = false;
+	return oa_tc6_write_register(tc6, OA_TC6_REG_CONFIG0, value);
+}
+
+static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
+{
+#if 0
+	u32 value;
+	int ret;
+#endif
 	/* Process rx chunk footer for the following,
 	 * 1. tx credits
 	 * 2. errors if any from MAC-PHY
@@ -893,6 +798,7 @@ static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 		netdev_err(tc6->netdev, "Config unsync error\n");
 		return -ENODEV;
 	}
+#if 0 /* Enable for Debugging Purposes */
 	ret = oa_tc6_read_register(tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TI, &value);
 	if (ret)
 		return ret;
@@ -909,6 +815,7 @@ static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 	if (ret)
 		return ret;
 	netdev_info(tc6->netdev, "Reading back: MAC_TSH %x", value);		
+#endif
 	return 0;
 }
 
@@ -1263,9 +1170,64 @@ static u16 oa_tc6_prepare_spi_tx_buf_for_rx_chunks(struct oa_tc6 *tc6, u16 len)
 	return needed_empty_chunks * OA_TC6_CHUNK_SIZE + len;
 }
 
+static int process_tx_timestamp(struct oa_tc6 *tc6){
+	int ret;
+	u32 value;
+	u32 ts_high;
+	u32 ts_low;
+	u64 timestamp;
+	
+	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STATUS0, &value);
+	if(ret)
+		return ret;
+	if(value && STATUS0_TS_AVAILABLE){
+		switch(value){
+			case STATUS0_TSA:
+				ret = oa_tc6_read_register(tc6, 0x10, &ts_high);
+				if (ret)
+					return ret;
+				ret = oa_tc6_read_register(tc6, 0x11, &ts_low);
+				if (ret)
+					return ret;
+				timestamp = ts_high;
+				timestamp = (timestamp << 32) | ts_low;
+				//netdev_info(tc6->netdev, "before inversion %x", value);
+				//value &= (STATUS0_TSA | !(STATUS0_TS_AVAILABLE));
+				//netdev_info(tc6->netdev, "after inversion %x", value);
+				oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, STATUS0_TSA); // Bits are R/W1C - clearing when 1 is written.
+				break;
+			case STATUS0_TSB:
+				ret = oa_tc6_read_register(tc6, 0x12, &ts_high);
+				if (ret)
+					return ret;
+				ret = oa_tc6_read_register(tc6, 0x13, &ts_low);
+				if (ret)
+					return ret;
+				timestamp = ts_high;
+				timestamp = (timestamp << 32) | ts_low;
+				//value &= (STATUS0_TSB | !(STATUS0_TS_AVAILABLE));
+				oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, STATUS0_TSB);  // Bits are R/W1C - clearing when 1 is written.
+				break;
+			case STATUS0_TSC:
+				ret = oa_tc6_read_register(tc6, 0x14, &ts_high);
+				if (ret)
+					return ret;
+				ret = oa_tc6_read_register(tc6, 0x15, &ts_low);
+				if (ret)
+					return ret;
+				timestamp = ts_high;
+				timestamp = (timestamp << 32) | ts_low;
+				//value &= (STATUS0_TSC | !(STATUS0_TS_AVAILABLE));
+				oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, STATUS0_TSC);  // Bits are R/W1C - clearing when 1 is written.
+				break;		
+		}
+		netdev_info(tc6->netdev, "Timestamp read back from TX: %llx", timestamp);
+	}
+	return 0;
+}
+
 static int oa_tc6_try_spi_transfer(struct oa_tc6 *tc6)
 {
-	u32 value;
 	int ret;
 
 	while (true) {
@@ -1296,15 +1258,20 @@ static int oa_tc6_try_spi_transfer(struct oa_tc6 *tc6)
 				   ret);
 			return ret;
 		}
-		
-		ret = oa_tc6_read_register(tc6, 0x10, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Time Stamp Capture A - High Reg: %x", value);
-		ret = oa_tc6_read_register(tc6, 0x11, &value);
-		if (ret)
-			return ret;
-		netdev_info(tc6->netdev, "Time Stamp Capture A - High Low: %x", value);
+		if (tc6->ftse){
+			ret = process_tx_timestamp(tc6);
+			if(ret)
+				netdev_err(tc6->netdev, "Unable to process TX timestamp - FTSE enabled: %d\n",
+				   ret);
+		}
+//		ret = oa_tc6_read_register(tc6, 0x10, &value);
+//		if (ret)
+//			return ret;
+//		netdev_info(tc6->netdev, "Time Stamp Capture A - High Reg: %x", value);
+//		ret = oa_tc6_read_register(tc6, 0x11, &value);
+//		if (ret)
+//			return ret;
+//		netdev_info(tc6->netdev, "Time Stamp Capture A - Low Reg: %x", value);
 		
 		ret = oa_tc6_process_spi_data_rx_buf(tc6, spi_length);
 		if (ret) {
@@ -1483,13 +1450,6 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev)
 		dev_err(&tc6->spi->dev,
 			"MAC internal PHY initialization failed: %d\n", ret);
 		return NULL;
-	}
-
-	ret = oa_tc6_enable_timestamping(tc6);
-	if (ret) {
-		dev_err(&tc6->spi->dev, "Failed to enable timestamping: %d\n",
-			ret);
-		goto phy_exit;
 	}
 
 	ret = oa_tc6_enable_data_transfer(tc6);

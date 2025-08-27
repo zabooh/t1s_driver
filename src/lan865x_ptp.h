@@ -1,19 +1,29 @@
-/* SPDX-License-Identifier: GPL-2.0+ */
-/* Copyright (C) 2025 Microchip Technology Inc. */
+// SPDX-License-Identifier: GPL-2.0+
+/*
+ * Microchip's LAN865x 10BASE-T1S MAC-PHY driver
+ *
+ * Author: Parthiban Veerasooran <parthiban.veerasooran@microchip.com>
+ */
+#ifndef LAN865X_PTP_H
+#define LAN865X_PTP_H
+#include "linux/ptp_clock_kernel.h"
+#include "oa_tc6.h"
+#define PTP_FLAG_PTP_CLOCK_REGISTERED 0x0815
 
-#ifndef _LAN865X_PTP_H_
-#define _LAN865X_PTP_H_
+struct lan865x_priv;
+struct lan865x_ptp {
+	int flags;
 
-#include <linux/ptp_clock_kernel.h>
+	/* command_lock: used to prevent concurrent ptp commands */
+	struct mutex	command_lock;
 
-struct lan865x_adapter {
-    struct net_device *netdev;
-    struct oa_tc6 *tc6;
-    struct ptp_clock *ptp_clock;
-    struct ptp_clock_info ptp_clock_info;
+	struct ptp_clock *ptp_clock;
+	struct ptp_clock_info ptp_clock_info;
 };
 
-int lan865x_ptp_init(struct lan865x_adapter *adapter);
-void lan865x_ptp_remove(struct lan865x_adapter *adapter);
-
-#endif /* _LAN865X_PTP_H_ */
+int lan865x_ptp_init(struct lan865x_priv *priv);
+void lan865x_ptp_close(struct lan865x_priv *priv);
+int lan865x_ptp_clock_set(struct lan865x_priv *priv,
+				  u64 seconds, u32 nano_seconds,
+				  u32 sub_nano_seconds);
+#endif //LAN865X_PTP_H
