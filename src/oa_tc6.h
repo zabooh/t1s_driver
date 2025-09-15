@@ -38,7 +38,8 @@ struct oa_tc6 {
 	bool rtsa;
 	bool rtsp;
 	bool incomplete_timestamp;
-	u64  timestamp;
+	s64  timestamp;
+	struct sk_buff_head tx_ts_pending_q;
 };
 
 struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev);

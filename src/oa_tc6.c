@@ -9,6 +9,7 @@
 #include <linux/iopoll.h>
 #include <linux/mdio.h>
 #include <linux/phy.h>
+#include <linux/timekeeping.h>
 #include "oa_tc6.h"
 
 /* OPEN Alliance TC6 registers */
@@ -819,17 +820,35 @@ static int oa_tc6_process_rx_chunk_footer(struct oa_tc6 *tc6, u32 footer)
 	return 0;
 }
 
-static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6) /* right place here to provide a timestamp to netdev with the current frame?? */
+static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6)
 {
-	tc6->rx_skb->protocol = eth_type_trans(tc6->rx_skb, tc6->netdev);
-	tc6->netdev->stats.rx_packets++;
-	tc6->netdev->stats.rx_bytes += tc6->rx_skb->len;
+    struct skb_shared_hwtstamps hwtstamps;
+    memset(&hwtstamps, 0, sizeof(hwtstamps));
+    hwtstamps.hwtstamp = ktime_set(tc6->timestamp >> 32, tc6->timestamp & 0xFFFFFFFF);
+    memcpy(skb_hwtstamps(tc6->rx_skb), &hwtstamps, sizeof(hwtstamps));
+	//skb_hwtstamps(tc6->rx_skb) = &hwtstamps;
+	//skb_tstamp_rx(tc6->rx_skb, &hwtstamps);
 
-	if (netif_rx(tc6->rx_skb) == NET_RX_DROP)
-		tc6->netdev->stats.rx_dropped++;
+    tc6->rx_skb->protocol = eth_type_trans(tc6->rx_skb, tc6->netdev);
+    tc6->netdev->stats.rx_packets++;
+    tc6->netdev->stats.rx_bytes += tc6->rx_skb->len;
 
-	tc6->rx_skb = NULL;
+    if (netif_rx(tc6->rx_skb) == NET_RX_DROP)
+        tc6->netdev->stats.rx_dropped++;
+
+    tc6->rx_skb = NULL;
 }
+//static void oa_tc6_submit_rx_skb(struct oa_tc6 *tc6) /* right place here to provide a timestamp to netdev with the current frame?? */
+//{
+//	tc6->rx_skb->protocol = eth_type_trans(tc6->rx_skb, tc6->netdev);
+//	tc6->netdev->stats.rx_packets++;
+//	tc6->netdev->stats.rx_bytes += tc6->rx_skb->len;
+//
+//	if (netif_rx(tc6->rx_skb) == NET_RX_DROP)
+//		tc6->netdev->stats.rx_dropped++;
+//
+//	tc6->rx_skb = NULL;
+//}
 
 static void oa_tc6_update_rx_skb(struct oa_tc6 *tc6, u8 *payload, u8 length)
 {
@@ -1100,6 +1119,9 @@ static void oa_tc6_add_tx_skb_to_spi_buf(struct oa_tc6 *tc6)
 		tc6->tx_skb_offset = 0;
 		tc6->netdev->stats.tx_bytes += tc6->tx_skb->len;
 		tc6->netdev->stats.tx_packets++;
+		if(tc6->ftse)
+			if (skb_shinfo(tc6->tx_skb)->tx_flags & SKBTX_HW_TSTAMP)
+				skb_queue_tail(&tc6->tx_ts_pending_q, tc6->tx_skb);
 		kfree_skb(tc6->tx_skb);
 		tc6->tx_skb = NULL;
 	}
@@ -1173,9 +1195,10 @@ static u16 oa_tc6_prepare_spi_tx_buf_for_rx_chunks(struct oa_tc6 *tc6, u16 len)
 static int process_tx_timestamp(struct oa_tc6 *tc6){
 	int ret;
 	u32 value;
-	u32 ts_high;
-	u32 ts_low;
-	u64 timestamp;
+	s32 ts_high;
+	s32 ts_low;
+	s64 timestamp;
+	struct sk_buff *skb;
 	
 	ret = oa_tc6_read_register(tc6, OA_TC6_REG_STATUS0, &value);
 	if(ret)
@@ -1221,6 +1244,14 @@ static int process_tx_timestamp(struct oa_tc6 *tc6){
 				oa_tc6_write_register(tc6, OA_TC6_REG_STATUS0, STATUS0_TSC);  // Bits are R/W1C - clearing when 1 is written.
 				break;		
 		}
+		skb = skb_dequeue(&tc6->tx_ts_pending_q);
+		if (skb) {
+    		struct skb_shared_hwtstamps hwtstamps;
+    		memset(&hwtstamps, 0, sizeof(hwtstamps));
+    		hwtstamps.hwtstamp = ktime_set(timestamp >> 32, timestamp & 0xFFFFFFFF);
+    		skb_tstamp_tx(skb, &hwtstamps);
+    		dev_kfree_skb_any(skb);
+		};
 		netdev_info(tc6->netdev, "Timestamp read back from TX: %llx", timestamp);
 	}
 	return 0;
@@ -1467,6 +1498,7 @@ struct oa_tc6 *oa_tc6_init(struct spi_device *spi, struct net_device *netdev)
 	}
 
 	skb_queue_head_init(&tc6->tx_skb_q);
+	skb_queue_head_init(&tc6->tx_ts_pending_q);
 	init_waitqueue_head(&tc6->spi_wq);
 
 	tc6->spi_thread = kthread_run(oa_tc6_spi_thread_handler, tc6,
