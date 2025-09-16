@@ -23,12 +23,7 @@ SRC_DIR2="."
 DST_DIR2="../bsp_patch/mscc-brsdk-source-2024.09/output/mybuild/build/linux-custom/drivers/net/ethernet/microchip"
 
 FILES2=(
-    driver.md
-    load.sh
     Makefile
-    ptp_todo.md
-    README.md
-    release_notes.md
 )
 
 for file in "${FILES2[@]}"; do
