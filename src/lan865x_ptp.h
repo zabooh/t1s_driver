@@ -21,6 +21,7 @@ struct lan865x_ptp {
 	struct ptp_clock_info ptp_clock_info;
 };
 
+int lan865x_get_ts_info(struct net_device *netdev, struct ethtool_ts_info *info);
 int lan865x_ptp_init(struct lan865x_priv *priv);
 void lan865x_ptp_close(struct lan865x_priv *priv);
 int lan865x_ptp_clock_set(struct lan865x_priv *priv,

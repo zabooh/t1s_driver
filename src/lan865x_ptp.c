@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/net_tstamp.h>
+#include <linux/ethtool.h>
 #include "oa_tc6.h"
 #include "lan865x_ptp.h"
 #include "lan865x.h"
@@ -52,6 +53,31 @@ static int lan865x_ptpci_adjfine(struct ptp_clock_info *ptpci, long scaled_ppm)
 	ret = oa_tc6_write_register(priv->tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TI, lan865x_rate_adj_ns);
 	ret = oa_tc6_write_register(priv->tc6, (OA_TC6_CTRL_HEADER_MMS_MAC << 16) | MAC_TISUBN, lan865x_rate_adj_subns);
 	return ret;
+}
+
+int lan865x_get_ts_info(struct net_device *netdev, struct ethtool_ts_info *info)
+{
+    struct lan865x_priv *priv = netdev_priv(netdev);
+
+    info->so_timestamping =
+        SOF_TIMESTAMPING_TX_HARDWARE |
+        SOF_TIMESTAMPING_RX_HARDWARE |
+        SOF_TIMESTAMPING_RAW_HARDWARE;
+
+    if (priv->ptp.ptp_clock)
+        info->phc_index = ptp_clock_index(priv->ptp.ptp_clock);
+    else
+        info->phc_index = -1;
+
+    info->tx_types =
+        (1 << HWTSTAMP_TX_ON) |
+        (1 << HWTSTAMP_TX_OFF);
+    info->rx_filters =
+        (1 << HWTSTAMP_FILTER_NONE) |
+		(1 << HWTSTAMP_FILTER_ALL) |
+		(1 << HWTSTAMP_FILTER_PTP_V2_EVENT);
+
+    return 0;
 }
 
 int lan865x_ptp_clock_set(struct lan865x_priv *priv,

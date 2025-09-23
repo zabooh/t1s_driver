@@ -73,6 +73,7 @@ static const struct ethtool_ops lan865x_ethtool_ops = {
 	.get_drvinfo        = lan865x_get_drvinfo,
 	.get_link_ksettings = phy_ethtool_get_link_ksettings,
 	.set_link_ksettings = phy_ethtool_set_link_ksettings,
+	.get_ts_info        = lan865x_get_ts_info,
 };
 
 static int lan865x_set_mac_address(struct net_device *netdev, void *addr)
