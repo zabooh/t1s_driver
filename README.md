@@ -128,6 +128,10 @@ sudo ethtool --set-plca-cfg eth2 enable on node-id 0 node-cnt 8 to-tmr 0x20 burs
 echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor > /dev/null
 ```
 **Note:** Provide the correct location of your new ethtool application in the above settings.
+## PTP (Precision Time Protocol) Support
+- For general questions about PTP on microcontrollers, see [ptp_faq.md](ptp_faq.md)
+- For implementation details, see [ptp_todo.md](ptp_todo.md)
+
 ## TODO
 - Timestamping according to Open Alliance TC6 is to be implemented.
 ## References
