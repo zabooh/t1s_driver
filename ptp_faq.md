@@ -225,7 +225,7 @@ Die Genauigkeit hängt von mehreren Faktoren ab:
 
 **10BASE-T1S spezifisch**:
 - **Zonen-Controller**: Synchronisation mehrerer ECUs in einer Zone
-- - **Sensor-Netzwerke**: Zeit-synchronisierte Datenerfassung
+- **Sensor-Netzwerke**: Zeit-synchronisierte Datenerfassung
 - **Aktuator-Steuerung**: Koordinierte Bewegungen
 
 ### Welche industriellen Anwendungen gibt es?
